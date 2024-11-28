@@ -1,0 +1,67 @@
+import boto3
+import os
+from flask import Flask, request, jsonify, send_from_directory
+import logging
+
+app = Flask(_name_)
+logging.basicConfig(level=logging.DEBUG)
+
+AWS_REGION = os.getenv('AWS_REGION', 'ap-south-1')
+s3 = boto3.client('s3', region_name=AWS_REGION)
+sqs = boto3.client('sqs', region_name=AWS_REGION)
+
+# Updated Bucket Names and SQS Queue URL
+ORIGINAL_BUCKET = 'my-app-originalfiles'
+CONVERTED_BUCKET = 'my-app-convertedfiles'
+SQS_QUEUE_URL = 'https://sqs.ap-south-1.amazonaws.com/654654399494/mandeep1'
+
+@app.route('/')
+def index():
+    return '''
+    <h1>Upload File</h1>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file">
+        <input type="submit" value="Upload">
+    </form>
+    '''
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+
+        if file:
+            s3.upload_fileobj(file, ORIGINAL_BUCKET, file.filename)
+            
+            # Send a message to the SQS queue to trigger file conversion
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=file.filename
+            )
+            
+            return jsonify({'message': 'File uploaded and conversion started'})
+        
+        return jsonify({'error': 'File upload failed'}), 500
+
+    except Exception as e:
+        logging.error(f'Error in upload_file: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/converted/<filename>', methods=['GET'])
+def get_converted_file(filename):
+    try:
+        # Download the converted file from S3 and send it back as a response
+        s3.download_file(CONVERTED_BUCKET, filename, '/tmp/' + filename)
+        return send_from_directory('/tmp', filename)
+    
+    except Exception as e:
+        logging.error(f'Error in get_converted_file: {e}')
+        return jsonify({'error': str(e)}), 500
+
+if _name_ == '_main_':
+    app.run(host='0.0.0.0', port=80, debug=True)
